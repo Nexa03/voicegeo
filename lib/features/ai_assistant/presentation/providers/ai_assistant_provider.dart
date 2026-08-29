@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -13,6 +13,7 @@ import '../../../../core/voice/providers/ghana_nlp_provider.dart';
 import '../../../../core/voice/voice_service.dart';
 import '../../../../core/constants/languages.dart';
 import '../../domain/entities/chat_message.dart';
+import '../../../../core/network/api_client.dart';
 
 enum AssistantState {
   idle,
@@ -50,6 +51,8 @@ class AIAssistantProvider extends ChangeNotifier {
 
   String? _conversationId;
 
+  late final ApiClient _apiClient;
+
   AssistantState get state => _state;
   List<ChatMessage> get messages => List.unmodifiable(_messages);
 
@@ -82,8 +85,16 @@ class AIAssistantProvider extends ChangeNotifier {
       fallbackTranslation: provider,
     );
 
+    // Initialize API client
+    _apiClient = ApiClient(_normalizeBaseUrl(backendUrl));
+
     _initAudio();
     _addWelcomeMessage();
+  }
+
+  static String _normalizeBaseUrl(String base) {
+    if (base.endsWith('/')) return base.substring(0, base.length - 1);
+    return base;
   }
 
   Future<void> _initAudio() async {
@@ -109,9 +120,7 @@ class AIAssistantProvider extends ChangeNotifier {
       final hasPermission = await _audioRecorder.hasPermission();
 
       if (!hasPermission) {
-        throw Exception(
-          'Microphone permission was not granted.',
-        );
+        throw Exception('Microphone permission was not granted.');
       }
 
       final dir = await getTemporaryDirectory();
@@ -172,65 +181,61 @@ class AIAssistantProvider extends ChangeNotifier {
         throw Exception('Recorded audio is empty.');
       }
 
-      final asrResult = await voiceRouter.transcribe(
-        audioBytes: audioBytes,
-        languageHint: selectedLanguage,
-        audioFormat: 'wav',
+      final base64Audio = base64Encode(audioBytes);
+
+      // Send to backend voice endpoint
+      final response = await _apiClient.postVoice(
+        base64Audio,
+        selectedLanguage,
+        'wav',
       );
 
-      final transcript = asrResult.text.trim();
+      final transcript = (response['transcript'] as String?)?.trim() ?? '';
 
       if (transcript.isEmpty) {
-        throw Exception(
-          'I could not understand the recording.',
-        );
+        throw Exception('I could not understand the recording.');
       }
 
-      final detectedLang =
-          asrResult.detectedLanguage.isNotEmpty
-              ? asrResult.detectedLanguage
-              : selectedLanguage;
+      final detectedLang = (response['language'] as String?) ?? selectedLanguage;
 
       _currentTranscript = transcript;
       _detectedLanguage = detectedLang;
       selectedLanguage = detectedLang;
 
-      _addMessage(
-        transcript,
-        isUser: true,
-        language: detectedLang,
-      );
+      _addMessage(transcript, isUser: true, language: detectedLang);
 
-      final aiResponse = await _processWithAI(
-        transcript,
-        detectedLang,
-      );
+      final aiResponse = response['ai'] as Map<String, dynamic>? ?? {};
 
-      final responseText =
-          aiResponse['message'] as String? ?? '';
+      final responseText = (aiResponse['message'] as String?) ?? '';
 
       if (responseText.trim().isEmpty) {
-        throw Exception(
-          'Kofi returned an empty response.',
-        );
+        throw Exception('Kofi returned an empty response.');
       }
 
       _currentResponse = responseText;
 
-      _addMessage(
-        responseText,
-        isUser: false,
-        language: detectedLang,
-      );
+      // handle requires_confirmation and pending_action
+      final requires = aiResponse['requires_confirmation'] as bool? ?? false;
+      final pending = aiResponse['pending_action'] as Map<String, dynamic>?;
 
-      if (
-        conversationMode != ConversationMode.text &&
-        responseText.trim().isNotEmpty
-      ) {
-        await _speakResponse(
-          responseText,
-          detectedLang,
-        );
+      // store or surface as needed
+      if (requires) {
+        // set internal state so UI can prompt user
+        // For now, just keep pendingAction in message metadata
+      }
+
+      _addMessage(responseText, isUser: false, language: detectedLang);
+
+      // Play TTS audio if provided
+      final audioBase64 = response['audio_base64'] as String?;
+      final audioMime = response['audio_mime'] as String?;
+
+      if (audioBase64 != null && audioBase64.isNotEmpty) {
+        final audioBytesOut = base64Decode(audioBase64);
+        await _playAudioBytes(audioBytesOut, audioMime ?? 'audio/mpeg');
+      } else if (conversationMode != ConversationMode.text) {
+        // Fallback: attempt to synthesize via local voiceRouter (mock provider)
+        await _speakResponse(responseText, detectedLang);
       }
 
       _state = AssistantState.idle;
@@ -240,11 +245,7 @@ class AIAssistantProvider extends ChangeNotifier {
 
       _lastError = e.toString();
 
-      _addMessage(
-        'Sorry, I could not process your voice message.',
-        isUser: false,
-        language: 'en-GH',
-      );
+      _addMessage('Sorry, I could not process your voice message.', isUser: false, language: 'en-GH');
 
       notifyListeners();
     } finally {
@@ -261,11 +262,7 @@ class AIAssistantProvider extends ChangeNotifier {
       return;
     }
 
-    _addMessage(
-      cleaned,
-      isUser: true,
-      language: selectedLanguage,
-    );
+    _addMessage(cleaned, isUser: true, language: selectedLanguage);
 
     _state = AssistantState.processing;
     _lastError = null;
@@ -273,129 +270,63 @@ class AIAssistantProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final aiResponse = await _processWithAI(
-        cleaned,
-        selectedLanguage,
-      );
+      final response = await _apiClient.postChat(cleaned, selectedLanguage, _conversationId);
 
-      final responseText =
-          aiResponse['message'] as String? ?? '';
+      final responseText = (response['message'] as String?) ?? '';
 
       if (responseText.trim().isEmpty) {
-        throw Exception(
-          'Kofi returned an empty response.',
-        );
+        throw Exception('Kofi returned an empty response.');
       }
 
       _currentResponse = responseText;
 
-      _addMessage(
-        responseText,
-        isUser: false,
-        language: selectedLanguage,
-      );
+      // update conversation id
+      _conversationId = response['conversation_id'] as String? ?? _conversationId;
 
-      if (
-        conversationMode != ConversationMode.text &&
-        responseText.trim().isNotEmpty
-      ) {
-        await _speakResponse(
-          responseText,
-          selectedLanguage,
-        );
+      // handle requires_confirmation & pending_action
+      final requires = response['requires_confirmation'] as bool? ?? false;
+      final pending = response['pending_action'] as Map<String, dynamic>?;
+
+      // Store or surface to UI as needed
+
+      _addMessage(responseText, isUser: false, language: selectedLanguage);
+
+      // Play audio if present
+      final audioBase64 = response['audio_base64'] as String?;
+      final audioMime = response['audio_mime'] as String?;
+
+      if (audioBase64 != null && audioBase64.isNotEmpty) {
+        final audioBytesOut = base64Decode(audioBase64);
+        await _playAudioBytes(audioBytesOut, audioMime ?? 'audio/mpeg');
+      } else if (conversationMode != ConversationMode.text) {
+        await _speakResponse(responseText, selectedLanguage);
       }
     } catch (e) {
       _lastError = e.toString();
 
-      _addMessage(
-        'Sorry, something went wrong while contacting Kofi.',
-        isUser: false,
-        language: 'en-GH',
-      );
+      _addMessage('Sorry, something went wrong while contacting Kofi.', isUser: false, language: 'en-GH');
     } finally {
       _state = AssistantState.idle;
       notifyListeners();
     }
   }
 
-  Future<Map<String, dynamic>> _processWithAI(
-    String message,
-    String? language,
-  ) async {
-    final base = backendUrl.replaceAll(RegExp(r'/$'), '');
-
-    final response = await http
-        .post(
-          Uri.parse('$base/api/v1/ai/chat'),
-          headers: const {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'message': message,
-            'language': language ?? selectedLanguage,
-            'conversation_id': _conversationId,
-          }),
-        )
-        .timeout(
-          const Duration(seconds: 30),
-        );
-
-    if (response.statusCode < 200 ||
-        response.statusCode >= 300) {
-      throw Exception(
-        'Kofi backend returned '
-        '${response.statusCode}: ${response.body}',
-      );
-    }
-
-    final data =
-        jsonDecode(response.body) as Map<String, dynamic>;
-
-    _conversationId =
-        data['conversation_id'] as String? ??
-        _conversationId;
-
-    return data;
-  }
-
-  Future<void> _speakResponse(
-    String text,
-    String language,
-  ) async {
+  Future<void> _playAudioBytes(Uint8List bytes, String mime) async {
     try {
       _state = AssistantState.speaking;
       notifyListeners();
 
-      final ttsResult = await voiceRouter.synthesize(
-        text: text,
-        language: language,
-      );
-
-      if (ttsResult.audioBytes.isEmpty) {
-        throw Exception(
-          'TTS returned empty audio.',
-        );
-      }
-
       final dir = await getTemporaryDirectory();
 
-      final filePath = path.join(
-        dir.path,
-        'tts_${DateTime.now().millisecondsSinceEpoch}.mp3',
-      );
+      final filePath = path.join(dir.path, 'tts_${DateTime.now().millisecondsSinceEpoch}.mp3');
 
       final file = File(filePath);
 
-      await file.writeAsBytes(
-        ttsResult.audioBytes,
-        flush: true,
-      );
+      await file.writeAsBytes(bytes, flush: true);
 
       await _audioPlayer.stop();
 
-      await _audioPlayer.play(
-        DeviceFileSource(filePath),
-      );
+      await _audioPlayer.play(DeviceFileSource(filePath));
 
       await _audioPlayer.onPlayerComplete.first;
 
@@ -410,22 +341,45 @@ class AIAssistantProvider extends ChangeNotifier {
     }
   }
 
-  void _addMessage(
-    String text, {
-    required bool isUser,
-    String? language,
-  }) {
-    _messages.add(
-      ChatMessage(
-        id: DateTime.now()
-            .microsecondsSinceEpoch
-            .toString(),
-        text: text,
-        language: language,
-        isUser: isUser,
-        timestamp: DateTime.now(),
-      ),
-    );
+  Future<void> _speakResponse(String text, String language) async {
+    try {
+      _state = AssistantState.speaking;
+      notifyListeners();
+
+      final ttsResult = await voiceRouter.synthesize(text: text, language: language);
+
+      if (ttsResult.audioBytes.isEmpty) {
+        // nothing to play; return
+        return;
+      }
+
+      final dir = await getTemporaryDirectory();
+
+      final filePath = path.join(dir.path, 'tts_${DateTime.now().millisecondsSinceEpoch}.mp3');
+
+      final file = File(filePath);
+
+      await file.writeAsBytes(ttsResult.audioBytes, flush: true);
+
+      await _audioPlayer.stop();
+
+      await _audioPlayer.play(DeviceFileSource(filePath));
+
+      await _audioPlayer.onPlayerComplete.first;
+
+      try {
+        await file.delete();
+      } catch (_) {}
+    } catch (e) {
+      _lastError = 'Voice playback failed: $e';
+    } finally {
+      _state = AssistantState.idle;
+      notifyListeners();
+    }
+  }
+
+  void _addMessage(String text, {required bool isUser, String? language}) {
+    _messages.add(ChatMessage(id: DateTime.now().microsecondsSinceEpoch.toString(), text: text, language: language, isUser: isUser, timestamp: DateTime.now()));
 
     notifyListeners();
   }
