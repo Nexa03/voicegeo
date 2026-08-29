@@ -1,27 +1,48 @@
+import base64
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-import random
-import uuid
-from datetime import datetime
+from pydantic import BaseModel, Field
 
-app = FastAPI(title="GeoHarvest AI API", version="1.0.0")
 
-# CORS for Flutter app
+APP_NAME = "GeoHarvest AI API"
+APP_VERSION = "2.0.0"
+
+GHANANLP_BASE_URL = os.getenv(
+    "GHANANLP_BASE_URL",
+    "https://translation-api.ghananlp.org",
+)
+GHANANLP_API_KEY = os.getenv("GHANANLP_API_KEY", "")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+app = FastAPI(
+    title=APP_NAME,
+    version=APP_VERSION,
+    description="Voice-first agricultural AI backend for GeoHarvest.",
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Models
+
 class ChatRequest(BaseModel):
-    message: str
-    language: str = "tw"
+    message: str = Field(min_length=1, max_length=5000)
+    language: str = "en-GH"
     conversation_id: Optional[str] = None
+
 
 class ChatResponse(BaseModel):
     type: str = "response"
@@ -33,218 +54,604 @@ class ChatResponse(BaseModel):
     tool_result: Optional[Dict[str, Any]] = None
     requires_confirmation: bool = False
     pending_action: Optional[Dict[str, Any]] = None
-    actions: List[Any] = []
+    actions: List[Any] = Field(default_factory=list)
     navigation: Optional[Dict[str, Any]] = None
-    suggested_actions: List[Any] = []
+    suggested_actions: List[Any] = Field(default_factory=list)
     expires_at: Optional[str] = None
 
-class VoiceRequest(BaseModel):
-    audio: str  # base64 encoded
-    language: str = "tw"
 
-# Demo AI Brain
-class DemoAIBrain:
-    def __init__(self):
-        self.conversations: Dict[str, List[Dict]] = {}
-        
-    def process_message(self, message: str, language: str = "tw", conversation_id: Optional[str] = None) -> Dict:
-        # Create or get conversation
-        if not conversation_id or conversation_id not in self.conversations:
-            conversation_id = str(uuid.uuid4())
-            self.conversations[conversation_id] = []
-        
-        history = self.conversations[conversation_id]
-        history.append({"role": "user", "content": message, "language": language})
-        
-        # Generate response
-        response = self._generate_response(message, language, history)
-        
-        history.append({"role": "assistant", "content": response["message"], "language": language})
-        
-        # Keep only last 20 messages
-        if len(history) > 20:
-            self.conversations[conversation_id] = history[-20:]
-        
-        return response
-    
-    def _generate_response(self, message: str, language: str, history: List[Dict]) -> Dict:
-        lower = message.lower()
-        
-        # Intent detection
-        intent = "general_chat"
-        tool_used = None
-        tool_result = None
-        requires_confirmation = False
-        
-        if any(word in lower for word in ['hello', 'hi', 'hey', 'good morning', 'good afternoon']):
-            intent = "greeting"
-            response_text = self._greeting(language)
-        elif any(word in lower for word in ['price', 'bo', 'cost', 'how much', 'sika']):
-            intent = "check_price"
-            tool_used = "get_market_prices"
-            tool_result = {"crop": "tomato", "price": "GH₵5.50/kg", "market": "Techiman"}
-            response_text = self._price_response(language)
-        elif any(word in lower for word in ['buyer', 'tɔ', 'sell', 'market', 'customer']):
-            intent = "find_buyer"
-            tool_used = "search_buyers"
-            tool_result = {"count": 3, "best_match": "Kwame Agri - 5km away"}
-            response_text = self._buyer_response(language)
-        elif any(word in lower for word in ['transport', 'truck', 'car', 'kaboom', 'delivery']):
-            intent = "find_transport"
-            tool_used = "find_transporters"
-            tool_result = {"count": 2, "eta": "2 hours", "cost": "GH₵200"}
-            response_text = self._transport_response(language)
-        elif any(word in lower for word in ['weather', 'nsuo', 'rain', 'sun', 'dry']):
-            intent = "check_weather"
-            tool_used = "get_weather"
-            tool_result = {"condition": "Partly cloudy", "temp": "28°C", "rain_chance": "20%"}
-            response_text = self._weather_response(language)
-        elif any(word in lower for word in ['help', 'boa', 'assist', 'what can you do']):
-            intent = "help"
-            response_text = self._help_response(language)
-        elif any(word in lower for word in ['thank', 'meda', 'thanks']):
-            intent = "thanks"
-            response_text = self._thanks_response(language)
-        elif any(word in lower for word in ['order', 'track', 'status']):
-            intent = "track_order"
-            tool_used = "get_order"
-            tool_result = {"order_id": "GH-2024-001", "status": "In transit", "eta": "Today 3pm"}
-            response_text = self._order_response(language)
+class VoiceRequest(BaseModel):
+    audio: str = Field(min_length=1)
+    language: str = "tw"
+    audio_format: str = "wav"
+
+
+class VoiceResponse(BaseModel):
+    transcript: str
+    language: str
+    ai: ChatResponse
+
+
+conversations: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def get_or_create_conversation(conversation_id: Optional[str]) -> str:
+    if conversation_id and conversation_id in conversations:
+        return conversation_id
+
+    new_id = str(uuid.uuid4())
+    conversations[new_id] = []
+    return new_id
+
+
+def save_message(
+    conversation_id: str,
+    role: str,
+    content: str,
+    language: str,
+) -> None:
+    history = conversations.setdefault(conversation_id, [])
+
+    history.append(
+        {
+            "role": role,
+            "content": content,
+            "language": language,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    if len(history) > 30:
+        conversations[conversation_id] = history[-30:]
+
+
+SUPPORTED_LANGUAGES = {
+    "tw",
+    "en-GH",
+    "gaa",
+    "dag",
+    "ee",
+    "yo",
+}
+
+
+def normalize_language(language: str) -> str:
+    language = (language or "en-GH").strip()
+
+    if language in SUPPORTED_LANGUAGES:
+        return language
+
+    aliases = {
+        "en": "en-GH",
+        "english": "en-GH",
+        "twi": "tw",
+        "akan": "tw",
+        "gaa": "gaa",
+        "ga": "gaa",
+        "ewe": "ee",
+        "dagbani": "dag",
+        "yoruba": "yo",
+    }
+
+    return aliases.get(language.lower(), "en-GH")
+
+
+class KofiEngine:
+    """
+    Safe fallback engine.
+
+    IMPORTANT:
+    This engine deliberately does NOT invent market prices,
+    buyer counts, transporter costs or weather conditions.
+
+    Those values must come from real GeoHarvest services later.
+    """
+
+    def process(
+        self,
+        message: str,
+        language: str,
+        conversation_id: str,
+    ) -> Dict[str, Any]:
+
+        text = message.lower().strip()
+
+        intent = self.detect_intent(text)
+
+        if intent == "greeting":
+            response = self.greeting(language)
+
+        elif intent == "check_price":
+            response = self.price_response(language)
+
+        elif intent == "find_buyer":
+            response = self.buyer_response(language)
+
+        elif intent == "find_transport":
+            response = self.transport_response(language)
+
+        elif intent == "check_weather":
+            response = self.weather_response(language)
+
+        elif intent == "track_order":
+            response = self.order_response(language)
+
+        elif intent == "help":
+            response = self.help_response(language)
+
+        elif intent == "thanks":
+            response = self.thanks_response(language)
+
         else:
-            intent = "general_chat"
-            response_text = self._default_response(language)
-        
+            response = self.default_response(language)
+
         return {
             "type": "response",
-            "conversation_id": "demo",
-            "message": response_text,
+            "conversation_id": conversation_id,
+            "message": response,
             "language": language,
             "detected_intent": intent,
-            "tool_used": tool_used,
-            "tool_result": tool_result,
-            "requires_confirmation": requires_confirmation,
+            "tool_used": None,
+            "tool_result": None,
+            "requires_confirmation": False,
             "pending_action": None,
             "actions": [],
             "navigation": None,
-            "suggested_actions": [],
+            "suggested_actions": self.suggestions(intent),
             "expires_at": None,
         }
-    
-    def _greeting(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Akwaaba! Me yɛ Kofi, wo assistant. Mepɛ sɛ meboa wo. Mepɛ sɛ mehu wo asɛm?"
-        elif lang == 'gaa':
-            return "Akpe! Nye Kofi, wo assistant. Mepɛ me hee wo."
-        elif lang == 'en-GH':
-            return "Hello! I'm Kofi, your assistant. How can I help you today?"
-        return "Hello! I'm Kofi."
-    
-    def _price_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Tomato bo yɛ GH₵5.50 kilo baako. Yam yɛ GH₵3.20. Garden egg yɛ GH₵4.00. Wopɛ sɛ mekyerɛ wo anaa?"
-        elif lang == 'en-GH':
-            return "Tomato is GH₵5.50/kg. Yam is GH₵3.20. Garden egg is GH₵4.00. Want me to show more?"
-        return "Tomato: GH₵5.50/kg."
-    
-    def _buyer_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Mahu buyers abiɛsa a wɔpɛ tomato wɔ Techiman. Kwame Agri yɛ ɔbɛn wo paa - 5 km. Ɔpɛ crates 15. Wopɛ sɛ mekyerɛ wo?"
-        elif lang == 'en-GH':
-            return "I found 3 buyers for tomato in Techiman. Kwame Agri is closest - 5km. They want 15 crates. Show you?"
-        return "Found 3 buyers in Techiman."
-    
-    def _transport_response(self, str) -> str:
-        if lang == 'tw':
-            return "Mahu transporters abiɛsa wɔ Wenchi. Wɔbɛtumi abɔ wo GH₵200. Ɔbɛn wo paa no bɛba wɔ 2 hours. Wopɛ sɛ mefrɛ wo?"
-        elif lang == 'en-GH':
-            return "Found 3 transporters in Wenchi. Cost is GH₵200. Closest arrives in 2 hours. Call them?"
-        return "Found transporters. GH₵200, 2 hours."
-    
-    def _weather_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Nsuo bɛtɔ nnɛ. Wobɛtumi adua wɔ wo farm. Yei yɛ dwuma ma wo crops."
-        elif lang == 'en-GH':
-            return "Rain expected today. Good for your farm. Your crops will benefit."
-        return "Rain expected today."
-    
-    def _help_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Mebɔ tumi: 1. Hwehwɛ buyers 2. Check prices 3. Find transport 4. Check weather 5. Track orders. Ka asɛm no!"
-        elif lang == 'en-GH':
-            return "I can help: 1. Find buyers 2. Check prices 3. Find transport 4. Check weather 5. Track orders. Just ask!"
-        return "I can help with: buyers, prices, transport, weather, orders."
-    
-    def _thanks_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Yiw! Meda wo ase. Biribi foforo bi?"
-        elif lang == 'en-GH':
-            return "You're welcome! Anything else?"
-        return "You're welcome!"
-    
-    def _order_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Wo order no wɔ kwan so. Ɔbɛba nnɛ wɔ 3pm. Tracking code yɛ GH-2024-001."
-        elif lang == 'en-GH':
-            return "Your order is in transit. Arriving today at 3pm. Tracking: GH-2024-001"
-        return "Order in transit. ETA: today 3pm."
-    
-    def _default_response(self, lang: str) -> str:
-        if lang == 'tw':
-            return "Menya wo asɛm. Mpɛ meboa wo. Kɔkɔɔ ka asɛm no bio anaa."
-        elif lang == 'en-GH':
-            return "I understand. Let me help you. Could you tell me more?"
-        return "I understand. How can I help?"
 
-ai_brain = DemoAIBrain()
+    def detect_intent(self, text: str) -> str:
+        if any(
+            word in text
+            for word in [
+                "hello",
+                "hi",
+                "hey",
+                "akwaaba",
+                "good morning",
+                "good afternoon",
+            ]
+        ):
+            return "greeting"
 
-# Routes
+        if any(
+            word in text
+            for word in [
+                "price",
+                "prices",
+                "how much",
+                "cost",
+                "bo",
+                "sika",
+                "ɛyɛ",
+            ]
+        ):
+            return "check_price"
+
+        if any(
+            word in text
+            for word in [
+                "buyer",
+                "buyers",
+                "sell",
+                "selling",
+                "market",
+                "customer",
+                "tɔ",
+                "tɔn",
+            ]
+        ):
+            return "find_buyer"
+
+        if any(
+            word in text
+            for word in [
+                "transport",
+                "transporter",
+                "truck",
+                "vehicle",
+                "delivery",
+                "lorry",
+                "car",
+            ]
+        ):
+            return "find_transport"
+
+        if any(
+            word in text
+            for word in [
+                "weather",
+                "rain",
+                "raining",
+                "sun",
+                "forecast",
+                "nsuo",
+            ]
+        ):
+            return "check_weather"
+
+        if any(
+            word in text
+            for word in [
+                "order",
+                "track",
+                "tracking",
+                "delivery status",
+            ]
+        ):
+            return "track_order"
+
+        if any(
+            word in text
+            for word in [
+                "help",
+                "assist",
+                "boa",
+                "what can you do",
+            ]
+        ):
+            return "help"
+
+        if any(
+            word in text
+            for word in [
+                "thank",
+                "thanks",
+                "meda",
+                "medaase",
+            ]
+        ):
+            return "thanks"
+
+        return "general_chat"
+
+    def greeting(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Akwaaba! Me yɛ Kofi, wo GeoHarvest assistant. "
+                "Mepɛ sɛ meboa wo. Ka asɛm no."
+            )
+
+        return (
+            "Hello! I'm Kofi, your GeoHarvest assistant. "
+            "I can help you with farming, buyers, produce, transport "
+            "and other GeoHarvest services."
+        )
+
+    def price_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Mɛtumi ahwehwɛ nnɛ deɛ ɛyɛ nokware wɔ market prices mu. "
+                "Nanso saa bere yi, market-price service no nnya nni hɔ. "
+                "Ka crop ne market a wopɛ sɛ mecheck."
+            )
+
+        return (
+            "I can check market prices when the GeoHarvest market-price "
+            "service is connected. I won't invent a price for you. "
+            "Tell me the crop and market you want to check."
+        )
+
+    def buyer_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Mɛtumi ahwehwɛ buyers ama wo. "
+                "Merehwehwɛ buyer service no connection. "
+                "Ka produce, quantity ne wo location."
+            )
+
+        return (
+            "I can help you find buyers. The live buyer service still "
+            "needs to be connected. Tell me your produce, quantity and location."
+        )
+
+    def transport_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Mɛtumi ahwehwɛ transporter ama wo. "
+                "Live transport matching service no da so reba. "
+                "Ka wo location, produce ne quantity."
+            )
+
+        return (
+            "I can help find transport. The live transporter-matching "
+            "service still needs to be connected. Tell me your location, "
+            "produce and quantity."
+        )
+
+    def weather_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Mɛtumi akyerɛ wo weather forecast, nanso ɛsɛ sɛ meconnect "
+                "me live weather service ansa na matumi ama wo forecast a ɛyɛ nokware."
+            )
+
+        return (
+            "I can provide weather information once the live GeoHarvest "
+            "weather service is connected. I won't make up a forecast."
+        )
+
+    def order_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Ka wo order number no ma me, na mɛhwɛ tracking information "
+                "sɛ live order service no connected."
+            )
+
+        return (
+            "Give me your order or tracking number and I can check it "
+            "when the live GeoHarvest order service is connected."
+        )
+
+    def help_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Mɛboa wo wɔ produce, buyers, market prices, transport, "
+                "weather ne orders ho. Ka nea wopɛ sɛ yɛyɛ."
+            )
+
+        return (
+            "I can help with produce, buyers, market prices, transport, "
+            "weather and orders. Tell me what you want to do."
+        )
+
+    def thanks_response(self, language: str) -> str:
+        if language == "tw":
+            return "Meda wo ase. Biribi foforo wɔ hɔ a wopɛ sɛ meboa wo?"
+
+        return "You're welcome. What else can I help you with?"
+
+    def default_response(self, language: str) -> str:
+        if language == "tw":
+            return (
+                "Meate wo asɛm no. Ka ho asɛm kakra na mɛboa wo."
+            )
+
+        return (
+            "I hear you. Tell me a little more about what you need "
+            "and I'll help."
+        )
+
+    def suggestions(self, intent: str) -> List[str]:
+        suggestions = {
+            "check_price": [
+                "Check tomato price",
+                "Find buyers",
+                "Find transport",
+            ],
+            "find_buyer": [
+                "Check market price",
+                "Find transport",
+            ],
+            "find_transport": [
+                "Find buyers",
+                "Track order",
+            ],
+            "check_weather": [
+                "Check market price",
+                "Find buyers",
+            ],
+        }
+
+        return suggestions.get(
+            intent,
+            [
+                "Check market price",
+                "Find buyers",
+                "Find transport",
+            ],
+        )
+
+
+kofi = KofiEngine()
+
+
+async def ghananlp_transcribe(
+    audio_bytes: bytes,
+    language: str,
+    audio_format: str,
+) -> str:
+
+    if not GHANANLP_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "GHANANLP_API_KEY is not configured on the backend."
+            ),
+        )
+
+    language = normalize_language(language)
+
+    content_types = {
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+        "m4a": "audio/mp4",
+        "aac": "audio/aac",
+        "webm": "audio/webm",
+    }
+
+    content_type = content_types.get(
+        audio_format.lower(),
+        "audio/wav",
+    )
+
+    url = (
+        f"{GHANANLP_BASE_URL}"
+        f"/asr/v2/transcribe?language={language}"
+    )
+
+    headers = {
+        "Content-Type": content_type,
+        "Ocp-Apim-Subscription-Key": GHANANLP_API_KEY,
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            url,
+            headers=headers,
+            content=audio_bytes,
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"GhanaNLP ASR failed "
+                f"({response.status_code}): {response.text[:500]}"
+            ),
+        )
+
+    return response.text.strip()
+
+
+@app.get("/")
+def root() -> Dict[str, Any]:
+    return {
+        "name": APP_NAME,
+        "version": APP_VERSION,
+        "status": "running",
+        "service": "GeoHarvest Kofi",
+    }
+
+
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+def health() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "service": APP_NAME,
+        "version": APP_VERSION,
+        "ghananlp_configured": bool(GHANANLP_API_KEY),
+        "openai_configured": bool(OPENAI_API_KEY),
+    }
 
-@app.post("/api/v1/ai/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
-    try:
-        response = ai_brain.process_message(
-            message=request.message,
-            language=request.language,
-            conversation_id=request.conversation_id,
-        )
-        return ChatResponse(**response)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/v1/ai/voice")
-def voice(request: VoiceRequest):
-    # Voice endpoint - in production, this would do ASR first
-    # For now, treat the base64 audio as a text message
+@app.post(
+    "/api/v1/ai/chat",
+    response_model=ChatResponse,
+)
+def chat(request: ChatRequest) -> ChatResponse:
+
+    language = normalize_language(request.language)
+
+    conversation_id = get_or_create_conversation(
+        request.conversation_id
+    )
+
+    save_message(
+        conversation_id,
+        "user",
+        request.message,
+        language,
+    )
+
+    result = kofi.process(
+        message=request.message,
+        language=language,
+        conversation_id=conversation_id,
+    )
+
+    save_message(
+        conversation_id,
+        "assistant",
+        result["message"],
+        language,
+    )
+
+    return ChatResponse(**result)
+
+
+@app.post(
+    "/api/v1/ai/voice",
+    response_model=VoiceResponse,
+)
+async def voice(request: VoiceRequest) -> VoiceResponse:
+
     try:
-        import base64
-        # Decode audio (in production, pass to ASR)
-        # audio_bytes = base64.b64decode(request.audio)
-        
-        response = ai_brain.process_message(
-            message="[Voice message]",
-            language=request.language,
+        audio_bytes = base64.b64decode(
+            request.audio,
+            validate=True,
         )
-        return response
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid base64 audio: {exc}",
+        )
+
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio payload is empty.",
+        )
+
+    transcript = await ghananlp_transcribe(
+        audio_bytes=audio_bytes,
+        language=request.language,
+        audio_format=request.audio_format,
+    )
+
+    if not transcript:
+        raise HTTPException(
+            status_code=422,
+            detail="Speech recognition returned an empty transcript.",
+        )
+
+    language = normalize_language(request.language)
+
+    conversation_id = get_or_create_conversation(None)
+
+    save_message(
+        conversation_id,
+        "user",
+        transcript,
+        language,
+    )
+
+    result = kofi.process(
+        message=transcript,
+        language=language,
+        conversation_id=conversation_id,
+    )
+
+    save_message(
+        conversation_id,
+        "assistant",
+        result["message"],
+        language,
+    )
+
+    return VoiceResponse(
+        transcript=transcript,
+        language=language,
+        ai=ChatResponse(**result),
+    )
+
 
 @app.get("/api/v1/ai/conversations")
-def get_conversations():
+def get_conversations() -> Dict[str, Any]:
     return {
         "conversations": [
-            {"id": conv_id, "messages": msgs[-5:]} 
-            for conv_id, msgs in ai_brain.conversations.items()
+            {
+                "id": conversation_id,
+                "messages": messages[-10:],
+            }
+            for conversation_id, messages in conversations.items()
         ]
     }
 
+
 @app.get("/api/v1/ai/conversations/{conversation_id}")
-def get_conversation(conversation_id: str):
-    if conversation_id not in ai_brain.conversations:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+def get_conversation(
+    conversation_id: str,
+) -> Dict[str, Any]:
+
+    if conversation_id not in conversations:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
     return {
         "id": conversation_id,
-        "messages": ai_brain.conversations[conversation_id]
+        "messages": conversations[conversation_id],
     }

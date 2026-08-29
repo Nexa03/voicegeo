@@ -1,12 +1,14 @@
 import 'dart:typed_data';
+
 import 'voice_service.dart';
-import '../constants/languages.dart';
 
 class VoiceRouter {
   final VoiceService primaryASR;
   final VoiceService fallbackASR;
+
   final VoiceService primaryTTS;
   final VoiceService fallbackTTS;
+
   final VoiceService primaryTranslation;
   final VoiceService fallbackTranslation;
 
@@ -24,17 +26,26 @@ class VoiceRouter {
     String? languageHint,
     String? audioFormat,
   }) async {
+    VoiceServiceException? primaryError;
+
     try {
       final result = await primaryASR.transcribe(
         audioBytes: audioBytes,
         languageHint: languageHint,
         audioFormat: audioFormat,
       );
-      if (result.text.isNotEmpty && result.text.length > 1) {
+
+      if (result.text.trim().isNotEmpty) {
         return result;
       }
     } catch (e) {
-      // Fall through to fallback
+      primaryError = e is VoiceServiceException
+          ? e
+          : VoiceServiceException(
+              e.toString(),
+              provider: 'primary',
+              isRetryable: true,
+            );
     }
 
     try {
@@ -43,15 +54,15 @@ class VoiceRouter {
         languageHint: languageHint,
         audioFormat: audioFormat,
       );
-      if (result.text.isNotEmpty) {
+
+      if (result.text.trim().isNotEmpty) {
         return result;
       }
-    } catch (e) {
-      // Fall through
-    }
+    } catch (_) {}
 
     throw VoiceServiceException(
-      'All ASR providers failed',
+      'All ASR providers failed.'
+      '${primaryError != null ? ' ${primaryError.message}' : ''}',
       isRetryable: false,
     );
   }
@@ -61,20 +72,13 @@ class VoiceRouter {
     required String language,
     String? voice,
   }) async {
-    final langInfo = getLanguageByCode(language);
-    final usePrimary = langInfo?.supportedByGhanaNLP ?? false;
-
-    if (usePrimary) {
-      try {
-        return await primaryTTS.synthesize(
-          text: text,
-          language: language,
-          voice: voice,
-        );
-      } catch (e) {
-        // Fall through
-      }
-    }
+    try {
+      return await primaryTTS.synthesize(
+        text: text,
+        language: language,
+        voice: voice,
+      );
+    } catch (_) {}
 
     try {
       return await fallbackTTS.synthesize(
@@ -82,9 +86,7 @@ class VoiceRouter {
         language: language,
         voice: voice,
       );
-    } catch (e) {
-      // Fall through
-    }
+    } catch (_) {}
 
     throw VoiceServiceException(
       'All TTS providers failed for language: $language',
@@ -103,9 +105,7 @@ class VoiceRouter {
         sourceLang: sourceLang,
         targetLang: targetLang,
       );
-    } catch (e) {
-      // Fall through
-    }
+    } catch (_) {}
 
     try {
       return await fallbackTranslation.translate(
@@ -113,12 +113,10 @@ class VoiceRouter {
         sourceLang: sourceLang,
         targetLang: targetLang,
       );
-    } catch (e) {
-      // Fall through
-    }
+    } catch (_) {}
 
     throw VoiceServiceException(
-      'All translation providers failed',
+      'All translation providers failed.',
       isRetryable: true,
     );
   }
