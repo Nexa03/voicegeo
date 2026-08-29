@@ -9,6 +9,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+# Load .env for local development (do not commit secrets to the repo)
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Local service imports
+from backend.services.ai_service import AiService
+from backend.tools.tool_registry import ToolRegistry
+from backend.services.tts_service import TTSService
+
 
 APP_NAME = "GeoHarvest AI API"
 APP_VERSION = "2.0.0"
@@ -21,6 +31,8 @@ GHANANLP_API_KEY = os.getenv("GHANANLP_API_KEY", "")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+USE_MOCK = os.getenv("USE_MOCK_SERVICES", "true").lower() in ("1", "true", "yes")
 
 
 app = FastAPI(
@@ -70,6 +82,9 @@ class VoiceResponse(BaseModel):
     transcript: str
     language: str
     ai: ChatResponse
+    # Optional TTS audio returned as base64-encoded bytes and mime type
+    audio_base64: Optional[str] = None
+    audio_mime: Optional[str] = None
 
 
 conversations: Dict[str, List[Dict[str, Any]]] = {}
@@ -446,6 +461,11 @@ class KofiEngine:
 
 kofi = KofiEngine()
 
+# Instantiate services
+ai_service = AiService(fallback_engine=kofi)
+tool_registry = ToolRegistry(use_mocks=USE_MOCK)
+tts_service = TTSService()
+
 
 async def ghananlp_transcribe(
     audio_bytes: bytes,
@@ -517,12 +537,19 @@ def root() -> Dict[str, Any]:
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
+    # lightweight checks
+    services = {
+        "ghananlp": bool(GHANANLP_API_KEY),
+        "openai": bool(OPENAI_API_KEY and ai_service is not None),
+        "tts": True if tts_service is not None else False,
+    }
+
     return {
         "status": "ok",
         "service": APP_NAME,
         "version": APP_VERSION,
-        "ghananlp_configured": bool(GHANANLP_API_KEY),
-        "openai_configured": bool(OPENAI_API_KEY),
+        "use_mock_services": USE_MOCK,
+        "services": services,
     }
 
 
@@ -545,16 +572,39 @@ def chat(request: ChatRequest) -> ChatResponse:
         language,
     )
 
-    result = kofi.process(
+    # Use AI service to process message
+    result = ai_service.process(
         message=request.message,
         language=language,
         conversation_id=conversation_id,
     )
 
+    # If the AI suggested a tool, execute it via the tool registry
+    tool_used = result.get("tool_used") or result.get("tool")
+    tool_args = result.get("tool_args") or result.get("tool_args")
+
+    if tool_used:
+        try:
+            tool_result = tool_registry.execute(tool_used, tool_args or {})
+            result["tool_used"] = tool_used
+            result["tool_result"] = tool_result
+
+            # If the tool is unavailable, prefer to inform the user clearly
+            if isinstance(tool_result, dict) and tool_result.get("available") is False:
+                # augment the AI message to indicate unavailability when needed
+                result["message"] = (
+                    result.get("message", "") + "\n\n" +
+                    "I couldn't get live data for this request right now. Please try again later."
+                )
+
+        except Exception as e:
+            # do not crash; return safe message
+            result["tool_result"] = {"available": False, "error": str(e)}
+
     save_message(
         conversation_id,
         "assistant",
-        result["message"],
+        result.get("message", ""),
         language,
     )
 
@@ -607,23 +657,57 @@ async def voice(request: VoiceRequest) -> VoiceResponse:
         language,
     )
 
-    result = kofi.process(
+    # Process via AI service
+    result = ai_service.process(
         message=transcript,
         language=language,
         conversation_id=conversation_id,
     )
 
+    # Execute any requested tool
+    tool_used = result.get("tool_used") or result.get("tool")
+    tool_args = result.get("tool_args") or result.get("tool_args")
+
+    if tool_used:
+        try:
+            tool_result = tool_registry.execute(tool_used, tool_args or {})
+            result["tool_used"] = tool_used
+            result["tool_result"] = tool_result
+
+            if isinstance(tool_result, dict) and tool_result.get("available") is False:
+                result["message"] = (
+                    result.get("message", "") + "\n\n" +
+                    "Live data is currently unavailable for that tool."
+                )
+        except Exception as e:
+            result["tool_result"] = {"available": False, "error": str(e)}
+
     save_message(
         conversation_id,
         "assistant",
-        result["message"],
+        result.get("message", ""),
         language,
     )
+
+    # Attempt TTS synthesis for the response
+    tts_payload = tts_service.synthesize(result.get("message", ""), language=language)
+
+    audio_base64 = None
+    audio_mime = None
+
+    if tts_payload and isinstance(tts_payload, dict):
+        audio_bytes_out = tts_payload.get("audio_bytes") or b""
+        mime = tts_payload.get("mime_type") or tts_payload.get("mime") or "audio/mpeg"
+        if audio_bytes_out:
+            audio_base64 = base64.b64encode(audio_bytes_out).decode("ascii")
+            audio_mime = mime
 
     return VoiceResponse(
         transcript=transcript,
         language=language,
         ai=ChatResponse(**result),
+        audio_base64=audio_base64,
+        audio_mime=audio_mime,
     )
 
 
