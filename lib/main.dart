@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'features/ai_assistant/presentation/pages/ai_assistant_screen.dart';
+
+import 'features/chat/presentation/pages/chat_screen.dart';
+import 'features/chat/presentation/pages/splash_screen.dart';
 
 void main() {
   runApp(const GeoHarvestApp());
@@ -22,7 +24,12 @@ class GeoHarvestApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const AIAssistantScreen(),
+      // Named routes — SplashScreen navigates to '/chat' after boot validation.
+      initialRoute: '/',
+      routes: {
+        '/': (_) => const SplashScreen(),
+        '/chat': (_) => const ChatScreen(),
+      },
     );
   }
 }

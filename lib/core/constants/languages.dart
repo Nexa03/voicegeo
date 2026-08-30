@@ -141,4 +141,7 @@ String getLanguageDisplayName(String code) {
   return lang?.name ?? code.toUpperCase();
 }
 
+bool isLanguageSupported(String code) =>
+    allGhanaianLanguages.any((l) => l.code == code);
+
 const String defaultLanguage = 'tw';

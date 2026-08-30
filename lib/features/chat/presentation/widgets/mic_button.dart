@@ -18,6 +18,32 @@ class MicButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Color bg;
+    List<BoxShadow>? shadows;
+
+    if (isListening) {
+      bg = Colors.red;
+      shadows = [
+        BoxShadow(
+          color: Colors.red.withValues(alpha: 0.4),
+          blurRadius: 20,
+          spreadRadius: 5,
+        ),
+      ];
+    } else if (isBusy) {
+      bg = Colors.grey[800]!;
+      shadows = null;
+    } else {
+      bg = Colors.deepPurple;
+      shadows = [
+        BoxShadow(
+          color: Colors.deepPurple.withValues(alpha: 0.3),
+          blurRadius: 15,
+          spreadRadius: 2,
+        ),
+      ];
+    }
+
     return GestureDetector(
       onTapDown: onTapDown,
       onTapUp: onTapUp,
@@ -28,16 +54,8 @@ class MicButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: isListening
-              ? Colors.red
-              : isBusy
-                  ? Colors.grey[800]
-                  : Colors.deepPurple,
-          boxShadow: isListening
-              ? [BoxShadow(color: Colors.red.withValues(alpha: 0.4), blurRadius: 20, spreadRadius: 5)]
-              : isBusy
-                  ? null
-                  : [BoxShadow(color: Colors.deepPurple.withValues(alpha: 0.3), blurRadius: 15, spreadRadius: 2)],
+          color: bg,
+          boxShadow: shadows,
         ),
         child: Icon(
           isListening ? Icons.mic_rounded : Icons.mic_none_rounded,

@@ -19,9 +19,9 @@ dependencies:
   audioplayers: ^5.2.1
   permission_handler: ^11.3.1
 
-  # Networking
-  http: ^1.2.2
+  # Networking — single backend HTTP client (Dio); http kept for GhanaNLP voice provider
   dio: ^5.4.0
+  http: ^1.2.2
 
   # Storage
   shared_preferences: ^2.2.2
@@ -29,7 +29,7 @@ dependencies:
   path_provider: ^2.1.4
   path: ^1.9.0
 
-  # Maps
+  # Maps (planned GeoHarvest feature)
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
   geolocator: ^10.1.0
@@ -39,10 +39,16 @@ dependencies:
   flutter_svg: ^2.0.9
   lottie: ^3.1.0
 
+  # Utilities
+  equatable: ^2.0.5
+  logger: ^2.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  mockito: ^5.4.4
+  build_runner: ^2.4.8
 
 flutter:
   uses-material-design: true

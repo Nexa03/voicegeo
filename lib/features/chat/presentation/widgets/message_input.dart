@@ -12,13 +12,22 @@ class MessageInput extends StatefulWidget {
 class _MessageInputState extends State<MessageInput> {
   final _controller = TextEditingController();
 
+  void _submit() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    widget.onSubmitted(text);
+    _controller.clear();
+  }
+
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: _controller,
       style: const TextStyle(color: Colors.white),
+      textInputAction: TextInputAction.send,
+      onSubmitted: (_) => _submit(),
       decoration: InputDecoration(
-        hintText: 'Type in Twi or English...',
+        hintText: 'Type in Twi, English, or Ewe…',
         hintStyle: TextStyle(color: Colors.grey[600]),
         filled: true,
         fillColor: const Color(0xFF1A1A1A),
@@ -26,17 +35,16 @@ class _MessageInputState extends State<MessageInput> {
           borderRadius: BorderRadius.circular(24),
           borderSide: BorderSide.none,
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 20,
+          vertical: 14,
+        ),
         suffixIcon: IconButton(
           icon: const Icon(Icons.send_rounded, color: Colors.deepPurple),
-          onPressed: () {
-            if (_controller.text.trim().isEmpty) return;
-            widget.onSubmitted(_controller.text);
-            _controller.clear();
-          },
+          onPressed: _submit,
+          tooltip: 'Send',
         ),
       ),
-      onSubmitted: widget.onSubmitted,
     );
   }
 

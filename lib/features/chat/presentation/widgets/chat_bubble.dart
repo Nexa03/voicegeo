@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../domain/entities/chat_message.dart';
+import '../../../../core/domain/entities/chat_message.dart';
 
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
@@ -19,7 +19,9 @@ class ChatBubble extends StatelessWidget {
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: isUser ? const Color(0xFF7C3AED) : const Color(0xFF1E1E1E),
+          color: isUser
+              ? const Color(0xFF7C3AED)
+              : const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(20).copyWith(
             bottomRight: isUser ? const Radius.circular(4) : null,
             bottomLeft: isUser ? null : const Radius.circular(4),
@@ -30,7 +32,7 @@ class ChatBubble extends StatelessWidget {
           children: [
             Text(
               message.text,
-              style: TextStyle(
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 15,
                 height: 1.4,
@@ -47,7 +49,7 @@ class ChatBubble extends StatelessWidget {
     );
   }
 
-  String _formatTime(DateTime dt) {
-    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  }
+  String _formatTime(DateTime dt) =>
+      '${dt.hour.toString().padLeft(2, '0')}:'
+      '${dt.minute.toString().padLeft(2, '0')}';
 }
