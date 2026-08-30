@@ -1,144 +1,120 @@
-class GeoHarvestLanguage {
-  final String code;
-  final String name;
-  final String nativeName;
-  final String family;
-  final int speakerCount;
-  final bool supportedByGhanaNLP;
-  final bool supportedByWhisper;
-  final bool hasLocalTTS;
-  final bool hasLocalASR;
+/// Supported Ghanaian languages with metadata
+class GhanaianLanguage {
+  final String code; // e.g., 'tw', 'ee', 'gaa'
+  final String name; // e.g., 'Twi (Akan)'
+  final String nativeName; // e.g., 'Twi'
+  final String flag; // Emoji flag
+  final int speakers; // Number of speakers
+  final bool isSupported; // Whether ASR/TTS is supported
 
-  const GeoHarvestLanguage({
+  const GhanaianLanguage({
     required this.code,
     required this.name,
     required this.nativeName,
-    required this.family,
-    required this.speakerCount,
-    this.supportedByGhanaNLP = false,
-    this.supportedByWhisper = false,
-    this.hasLocalTTS = false,
-    this.hasLocalASR = false,
+    required this.flag,
+    required this.speakers,
+    required this.isSupported,
   });
 }
 
-const allGhanaianLanguages = [
-  GeoHarvestLanguage(
+const List<GhanaianLanguage> allGhanaianLanguages = [
+  GhanaianLanguage(
     code: 'tw',
-    name: 'Twi (Asante/Akuapem)',
+    name: 'Twi (Akan)',
     nativeName: 'Twi',
-    family: 'Akan',
-    speakerCount: 7500000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
+    flag: '🇬🇭',
+    speakers: 8000000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
-    code: 'fat',
-    name: 'Fante',
-    nativeName: 'Fante',
-    family: 'Akan',
-    speakerCount: 2000000,
-    supportedByWhisper: true,
-  ),
-  GeoHarvestLanguage(
-    code: 'en-GH',
-    name: 'Ghanaian English',
-    nativeName: 'Ghanaian English',
-    family: 'English (Creole)',
-    speakerCount: 25000000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
-  ),
-  GeoHarvestLanguage(
-    code: 'gaa',
-    name: 'Ga',
-    nativeName: 'Gã',
-    family: 'Kwa',
-    speakerCount: 1000000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
-  ),
-  GeoHarvestLanguage(
-    code: 'dag',
-    name: 'Dagbani',
-    nativeName: 'Dagbani',
-    family: 'Mole-Dagbani',
-    speakerCount: 800000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
-  ),
-  GeoHarvestLanguage(
+  GhanaianLanguage(
     code: 'ee',
     name: 'Ewe',
     nativeName: 'Eʋe',
-    family: 'Gbe',
-    speakerCount: 200000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
+    flag: '🇬🇭',
+    speakers: 3000000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
-    code: 'gur',
-    name: 'Gurene (Frafra)',
-    nativeName: 'Frafra',
-    family: 'Gur',
-    speakerCount: 500000,
-    supportedByWhisper: true,
+  GhanaianLanguage(
+    code: 'gaa',
+    name: 'Ga',
+    nativeName: 'Gã',
+    flag: '🇬🇭',
+    speakers: 2000000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
-    code: 'dang',
-    name: 'Dangme (Ada)',
-    nativeName: 'Dangme',
-    family: 'Kwa',
-    speakerCount: 300000,
-    supportedByWhisper: true,
+  GhanaianLanguage(
+    code: 'dag',
+    name: 'Dagbani',
+    nativeName: 'Dagbani',
+    flag: '🇬🇭',
+    speakers: 600000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
-    code: 'bon',
-    name: 'Bono',
-    nativeName: 'Bono',
-    family: 'Akan',
-    speakerCount: 1000000,
-    supportedByWhisper: true,
+  GhanaianLanguage(
+    code: 'fat',
+    name: 'Fante',
+    nativeName: 'Fante',
+    flag: '🇬🇭',
+    speakers: 1500000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
-    code: 'nzm',
-    name: 'Nzema',
-    nativeName: 'Nzema',
-    family: 'Kwa',
-    speakerCount: 200000,
-    supportedByWhisper: true,
+  GhanaianLanguage(
+    code: 'ha',
+    name: 'Hausa',
+    nativeName: 'Hausa',
+    flag: '🇬🇭',
+    speakers: 700000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
+  GhanaianLanguage(
     code: 'yo',
     name: 'Yoruba',
     nativeName: 'Yorùbá',
-    family: 'Niger-Congo',
-    speakerCount: 500000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
+    flag: '🇬🇭',
+    speakers: 500000,
+    isSupported: true,
   ),
-  GeoHarvestLanguage(
-    code: 'ki',
-    name: 'Kikuyu',
-    nativeName: 'Gĩkũyũ',
-    family: 'Bantu',
-    speakerCount: 500000,
-    supportedByGhanaNLP: true,
-    supportedByWhisper: true,
+  GhanaianLanguage(
+    code: 'en-GH',
+    name: 'English (Ghana)',
+    nativeName: 'English',
+    flag: '🇬🇭',
+    speakers: 9000000,
+    isSupported: true,
   ),
 ];
 
-GeoHarvestLanguage? getLanguageByCode(String code) {
+const String defaultLanguage = 'tw';
+
+String getLanguageDisplayName(String? code) {
+  if (code == null || code.isEmpty) return 'Select Language';
   try {
-    return allGhanaianLanguages.firstWhere((l) => l.code == code);
-  } on StateError {
-    return null;
+    return allGhanaianLanguages
+        .firstWhere((lang) => lang.code == code)
+        .name;
+  } catch (_) {
+    return code;
   }
 }
 
-String getLanguageDisplayName(String code) {
-  final lang = getLanguageByCode(code);
-  return lang?.name ?? code.toUpperCase();
+String getLanguageNativeName(String? code) {
+  if (code == null || code.isEmpty) return '';
+  try {
+    return allGhanaianLanguages
+        .firstWhere((lang) => lang.code == code)
+        .nativeName;
+  } catch (_) {
+    return code;
+  }
 }
 
-const String defaultLanguage = 'tw';
+bool isLanguageSupported(String? code) {
+  if (code == null || code.isEmpty) return false;
+  try {
+    return allGhanaianLanguages
+        .firstWhere((lang) => lang.code == code)
+        .isSupported;
+  } catch (_) {
+    return false;
+  }
+}
