@@ -314,7 +314,11 @@ class ChatResponse(BaseModel):
 
 
 class VoiceRequest(BaseModel):
-    audio: str = Field(min_length=1)
+    # No min_length constraint here: an empty string is valid base64 for b""
+    # and must reach the endpoint so the existing HTTPException(400) guard
+    # fires. Pydantic min_length=1 would return 422 before the endpoint runs,
+    # which violates the API contract (empty audio payload = 400 Bad Request).
+    audio: str
     language: str = "tw"
     audio_format: str = "wav"
 
