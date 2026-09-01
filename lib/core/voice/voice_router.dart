@@ -48,6 +48,15 @@ class VoiceRouter {
             );
     }
 
+    // Skip fallback if it is the same provider as primary
+    if (identical(primaryASR, fallbackASR)) {
+      throw VoiceServiceException(
+        'ASR provider failed.'
+        '${primaryError != null ? ' ${primaryError.message}' : ''}',
+        isRetryable: false,
+      );
+    }
+
     try {
       final result = await fallbackASR.transcribe(
         audioBytes: audioBytes,
@@ -80,6 +89,14 @@ class VoiceRouter {
       );
     } catch (_) {}
 
+    // Skip fallback if it is the same provider as primary
+    if (identical(primaryTTS, fallbackTTS)) {
+      throw VoiceServiceException(
+        'TTS provider failed for language: $language',
+        isRetryable: false,
+      );
+    }
+
     try {
       return await fallbackTTS.synthesize(
         text: text,
@@ -106,6 +123,14 @@ class VoiceRouter {
         targetLang: targetLang,
       );
     } catch (_) {}
+
+    // Skip fallback if it is the same provider as primary
+    if (identical(primaryTranslation, fallbackTranslation)) {
+      throw VoiceServiceException(
+        'Translation provider failed.',
+        isRetryable: true,
+      );
+    }
 
     try {
       return await fallbackTranslation.translate(
