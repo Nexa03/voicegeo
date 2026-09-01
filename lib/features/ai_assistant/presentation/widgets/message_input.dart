@@ -36,7 +36,11 @@ class _MessageInputState extends State<MessageInput> {
           },
         ),
       ),
-      onSubmitted: widget.onSubmitted,
+      onSubmitted: (text) {
+        if (text.trim().isEmpty) return;
+        widget.onSubmitted(text);
+        _controller.clear();
+      },
     );
   }
 
