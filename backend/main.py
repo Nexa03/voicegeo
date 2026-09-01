@@ -1,6 +1,7 @@
 import base64
 import os
 import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +9,12 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 APP_NAME = "GeoHarvest AI API"
 APP_VERSION = "2.0.0"
@@ -21,6 +27,15 @@ GHANANLP_API_KEY = os.getenv("GHANANLP_API_KEY", "")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT = 10.0  # seconds
+
+# Initialize OpenAI client if API key is set
+openai_client = None
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        logger.warning(f"Failed to initialize OpenAI client: {e}")
 
 
 app = FastAPI(
@@ -134,6 +149,17 @@ def normalize_language(language: str) -> str:
     }
 
     return aliases.get(language.lower(), "en-GH")
+
+
+SYSTEM_PROMPT = """You are Kofi, a helpful agricultural assistant for Ghanaian farmers.
+You provide advice about farming, buyers, produce, market prices, transport, and weather.
+
+CRITICAL: Do NOT invent or hallucinate data. Only provide information you are certain about.
+- Do NOT make up market prices, buyer contacts, or transporter details.
+- Do NOT fabricate weather forecasts or crop data.
+- If you don't have specific data, ask the user for more details or suggest they contact a specialist.
+- Keep responses concise and practical.
+"""
 
 
 class KofiEngine:
@@ -505,6 +531,60 @@ async def ghananlp_transcribe(
     return response.text.strip()
 
 
+def call_openai_with_fallback(
+    message: str,
+    conversation_id: str,
+    language: str,
+) -> tuple[str, str]:
+    """
+    Try to call OpenAI LLM with timeout and fallback to KofiEngine.
+    
+    Returns: (response_text, tool_used) where tool_used is "openai" or "kofi_fallback"
+    """
+    if not openai_client:
+        logger.info(
+            f"OpenAI not configured (conversation_id={conversation_id}), "
+            "using KofiEngine fallback"
+        )
+        return kofi.process(message, language, conversation_id)["message"], "kofi_fallback"
+
+    try:
+        # Get conversation history for context
+        history = conversations.get(conversation_id, [])
+        messages = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in history[-10:]  # Use last 10 messages for context
+        ]
+        messages.append({"role": "user", "content": message})
+
+        logger.info(f"Calling OpenAI (conversation_id={conversation_id}, model={OPENAI_MODEL})")
+        
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
+            timeout=OPENAI_TIMEOUT,
+            temperature=0.7,
+            max_tokens=500,
+        )
+
+        result = response.choices[0].message.content.strip()
+        logger.info(f"OpenAI call succeeded (conversation_id={conversation_id})")
+        return result, "openai"
+
+    except (APIError, APIConnectionError, APITimeoutError) as e:
+        logger.warning(
+            f"OpenAI call failed for conversation_id={conversation_id}: {e}. "
+            "Falling back to KofiEngine."
+        )
+        return kofi.process(message, language, conversation_id)["message"], "kofi_fallback"
+    except Exception as e:
+        logger.error(
+            f"Unexpected error calling OpenAI (conversation_id={conversation_id}): {e}. "
+            "Falling back to KofiEngine."
+        )
+        return kofi.process(message, language, conversation_id)["message"], "kofi_fallback"
+
+
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
@@ -545,20 +625,35 @@ def chat(request: ChatRequest) -> ChatResponse:
         language,
     )
 
-    result = kofi.process(
-        message=request.message,
-        language=language,
-        conversation_id=conversation_id,
+    # Try OpenAI first with fallback to KofiEngine
+    response_text, tool_used = call_openai_with_fallback(
+        request.message,
+        conversation_id,
+        language,
     )
 
     save_message(
         conversation_id,
         "assistant",
-        result["message"],
+        response_text,
         language,
     )
 
-    return ChatResponse(**result)
+    return ChatResponse(
+        type="response",
+        conversation_id=conversation_id,
+        message=response_text,
+        language=language,
+        detected_intent=None,
+        tool_used=tool_used,
+        tool_result=None,
+        requires_confirmation=False,
+        pending_action=None,
+        actions=[],
+        navigation=None,
+        suggested_actions=[],
+        expires_at=None,
+    )
 
 
 @app.post(
@@ -607,23 +702,38 @@ async def voice(request: VoiceRequest) -> VoiceResponse:
         language,
     )
 
-    result = kofi.process(
-        message=transcript,
-        language=language,
-        conversation_id=conversation_id,
+    # Try OpenAI first with fallback to KofiEngine
+    response_text, tool_used = call_openai_with_fallback(
+        transcript,
+        conversation_id,
+        language,
     )
 
     save_message(
         conversation_id,
         "assistant",
-        result["message"],
+        response_text,
         language,
     )
 
     return VoiceResponse(
         transcript=transcript,
         language=language,
-        ai=ChatResponse(**result),
+        ai=ChatResponse(
+            type="response",
+            conversation_id=conversation_id,
+            message=response_text,
+            language=language,
+            detected_intent=None,
+            tool_used=tool_used,
+            tool_result=None,
+            requires_confirmation=False,
+            pending_action=None,
+            actions=[],
+            navigation=None,
+            suggested_actions=[],
+            expires_at=None,
+        ),
     )
 
 
